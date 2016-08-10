@@ -1,6 +1,7 @@
 /* @flow */
 
 import { exec } from 'sb-exec'
+import hostedGitInfo from 'hosted-git-info'
 
 const VALID_TICKS = new Set(['✓', 'done'])
 const VALIDATION_REGEXP = /(?:Installing|Moving) (.*?) to .* (.*)/
@@ -39,6 +40,49 @@ export async function enablePackage(packageName: string): Promise<void> {
   }
 }
 
+// stolen from atom/apm, because we can't require('apm') here
+// see https://github.com/atom/apm/blob/master/src/install.coffee#L559-L572
+function getNormalizedGitUrls(packageUrl: string): Array<string> {
+  const packageInfo = hostedGitInfo.fromUrl(packageUrl)
+
+  if (packageUrl.indexOf('file://') === 0) {
+    return [packageUrl]
+  } else if (packageInfo.default === 'sshurl') {
+    return [packageInfo.toString()]
+  } else if (packageInfo.default === 'https') {
+    return [packageInfo.https().replace(/^git\+https:/, 'https:')]
+  } else if (packageInfo.default === 'shortcut') {
+    return [
+      packageInfo.https().replace(/^git\+https:/, 'https:'),
+      packageInfo.sshurl(),
+    ]
+  }
+
+  return []
+}
+
+function resolvePackage(packageName:string): Boolean {
+  if (atom.packages.resolvePackagePath(packageName)) {
+    return true
+  }
+
+  const gitUrls = new Set(getNormalizedGitUrls(packageName))
+  if (gitUrls.length) {
+    for (const eachPackage in atom.packages.getLoadedPackages()) {
+      if (eachPackage
+          && eachPackage.metadata
+          && eachPackage.metadata.repository
+          && eachPackage.metadata.repository.url
+          && gitUrls.has(eachPackage.metadata.repository.url)) {
+            // FIXME: does not handle URLs canonicalized by npm
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
 export function getDependencies(packageName: string): Array<string> {
   const toReturn = []
   const packageModule = atom.packages.getLoadedPackage(packageName)
@@ -46,7 +90,7 @@ export function getDependencies(packageName: string): Array<string> {
 
   if (packageDependencies) {
     for (const entry of (packageDependencies: Array<string>)) {
-      if (__steelbrain_package_deps.has(entry) || atom.packages.resolvePackagePath(entry)) {
+      if (__steelbrain_package_deps.has(entry) || resolvePackage(entry)) {
         continue
       }
       __steelbrain_package_deps.add(entry)
